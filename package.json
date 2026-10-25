@@ -1,0 +1,59 @@
+{
+  "name": "dsh-token-usage",
+  "version": "0.1.0",
+  "description": "Token 用量面板 for DeepSeek Harness Desktop: activity heatmap, daily trend line chart and per-model share donut, folded from the Session logs the harness already records.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    },
+    "./client": {
+      "default": "./client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.1"
+  },
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SeyanaA/dsh-token-usage.git"
+  },
+  "homepage": "https://github.com/SeyanaA/dsh-token-usage#readme",
+  "bugs": {
+    "url": "https://github.com/SeyanaA/dsh-token-usage/issues"
+  },
+  "author": "SeyanaA",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "tokens",
+    "usage",
+    "dashboard",
+    "heatmap",
+    "charts"
+  ],
+  "license": "MIT"
+}
