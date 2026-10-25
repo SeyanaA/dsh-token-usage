@@ -238,6 +238,8 @@ test/               纯 Node 冒烟测试
 
 ## License
 
+协作开发：[Codex](https://github.com/codex)（OpenAI 编程助手）。
+
 [MIT](./LICENSE) © 2026 SeyanaA
 
 ---
