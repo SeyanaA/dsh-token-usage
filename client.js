@@ -620,17 +620,37 @@ window.__ModuleLoader__.load({
     function ModelShare(props) {
       const models = props.models ?? []
       const total = props.total ?? 0
+      const [hover, setHover] = React.useState(null)
+      const wrapRef = React.useRef(null)
       const size = 240
       const radius = 86
       const stroke = 26
       const center = size / 2
       const circumference = 2 * Math.PI * radius
+      const tipModel = hover === null ? null : models[hover.index]
+
+      // Hovering one ring segment names the model and shows its numbers; the
+      // other segments dim so the highlighted slice is obvious.
+      const showTip = (event, index) => {
+        const wrap = wrapRef.current
+        const box = wrap === null || wrap === undefined || typeof wrap.getBoundingClientRect !== 'function'
+          ? null
+          : wrap.getBoundingClientRect()
+        const width = box === null ? size : box.width
+        const rawLeft = box === null ? 0 : event.clientX - box.left + 14
+        const left = Math.max(4, Math.min(Math.max(4, width - 250), rawLeft))
+        const rawTop = box === null ? 0 : event.clientY - box.top - 54
+        setHover({ index, left, top: Math.max(4, rawTop) })
+      }
+
       let offset = 0
       const arcs = []
       models.forEach((model, index) => {
         const share = total > 0 ? model.tokens / total : 0
         if (share <= 0) return
         const length = share * circumference
+        const active = hover !== null && hover.index === index
+        const dimmed = hover !== null && hover.index !== index
         arcs.push(h('circle', {
           key: model.key ?? model.id,
           cx: center,
@@ -638,14 +658,23 @@ window.__ModuleLoader__.load({
           r: radius,
           fill: 'none',
           stroke: PALETTE[index % PALETTE.length],
-          strokeWidth: stroke,
+          strokeWidth: active ? stroke + 6 : stroke,
           strokeDasharray: `${Math.max(0.5, length - 1.5)} ${circumference}`,
           strokeDashoffset: -offset * circumference,
           transform: `rotate(-90 ${center} ${center})`,
           strokeLinecap: 'butt',
-        }))
+          style: {
+            cursor: 'pointer',
+            opacity: dimmed ? 0.4 : 1,
+            transition: 'opacity .12s, stroke-width .12s',
+          },
+          onMouseEnter: (event) => showTip(event, index),
+          onMouseMove: (event) => showTip(event, index),
+          onMouseLeave: () => setHover(null),
+        }, h('title', { key: 'title' }, `${model.label ?? model.name} · ${fmtTokens(model.tokens)} tokens · ${fmtShare(model.share)}`)))
         offset += share
       })
+
       const donut = h('svg', {
         className: 'dstu-donut',
         viewBox: `0 0 ${size} ${size}`,
@@ -678,6 +707,45 @@ window.__ModuleLoader__.load({
         }, 'tokens'),
       ])
 
+      const tooltip = tipModel === null ? null : h('div', {
+        key: 'tip',
+        className: 'dstu-donutTip',
+        style: {
+          position: 'absolute',
+          left: hover.left + 'px',
+          top: hover.top + 'px',
+          zIndex: 7,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 9,
+          maxWidth: '250px',
+          padding: '8px 11px',
+          borderRadius: 8,
+          background: 'rgba(24,24,27,.95)',
+          color: '#fff',
+          fontSize: 12,
+          lineHeight: 1.4,
+          boxShadow: '0 8px 20px rgba(0,0,0,.35)',
+          pointerEvents: 'none',
+        },
+      }, [
+        h('span', {
+          key: 'dot',
+          className: 'dstu-legendDot',
+          style: { background: PALETTE[hover.index % PALETTE.length] },
+        }),
+        h('span', { key: 'meta', style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } }, [
+          h('span', {
+            key: 'name',
+            style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '196px' },
+          }, tipModel.label ?? tipModel.name),
+          h('span', {
+            key: 'numbers',
+            style: { fontSize: 11, opacity: 0.72 },
+          }, `${fmtTokens(tipModel.tokens)} tokens · ${fmtShare(tipModel.share)}`),
+        ]),
+      ])
+
       const legend = h('div', { className: 'dstu-donutLegend' }, models.length === 0
         ? [h('div', { key: 'empty', className: 'dstu-muted' }, '这段时间还没有模型用量')]
         : models.map((model, index) => h('div', { key: model.key ?? model.id, className: 'dstu-modelRow' }, [
@@ -697,7 +765,10 @@ window.__ModuleLoader__.load({
         h('div', { key: 'head', className: 'dstu-cardHead' }, [
           h('span', { key: 'title', className: 'dstu-cardTitle' }, '模型用量'),
         ]),
-        h('div', { key: 'body', className: 'dstu-donutCard' }, [donut, legend]),
+        h('div', { key: 'body', className: 'dstu-donutCard' }, [
+          h('div', { key: 'donut', className: 'dstu-donutWrap', ref: wrapRef }, [donut, tooltip]),
+          legend,
+        ]),
       ])
     }
 
@@ -962,7 +1033,8 @@ window.__ModuleLoader__.load({
         '.dstu-tooltipValue{flex:none;white-space:nowrap}',
         '.dstu-tooltipTotal{margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.72);font-size:11px}',
         '.dstu-donutCard{display:grid;grid-template-columns:280px minmax(0,1fr);gap:28px;align-items:center}',
-        '.dstu-donut{display:block;width:100%;max-width:280px;height:auto}',
+        '.dstu-donutWrap{position:relative;width:100%;max-width:280px}',
+        '.dstu-donut{display:block;width:100%;height:auto}',
         '.dstu-donutValue{fill:var(--dsw-alias-label-primary,#fff);font-size:30px;font-weight:650}',
         '.dstu-donutUnit{fill:var(--dsw-alias-label-tertiary,#8a8f98);font-size:13px}',
         '.dstu-donutLegend{display:flex;flex-direction:column;gap:14px;min-width:0}',

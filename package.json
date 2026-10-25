@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-usage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Token 用量面板 for DeepSeek Harness Desktop: activity heatmap, daily trend line chart and per-model share donut, folded from the Session logs the harness already records.",
   "type": "module",
   "main": "index.js",

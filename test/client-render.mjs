@@ -151,6 +151,23 @@ check(collectText(trendTree).join(' ').includes('每日 Token 趋势图'), 'tren
 check(collectText(donutTree).join(' ').includes('模型用量'), 'donut title missing')
 check(collectText(donutTree).join(' ').includes('Model A'), 'donut legend missing model')
 check(collectText(donutTree).join(' ').includes('Model A · Q'), 'same-name models must be annotated with their provider')
+const slices = []
+walk(donutTree, (node) => {
+  if (node.type === 'circle' && typeof node.props?.onMouseEnter === 'function') slices.push(node)
+})
+const hoverableSlices = overview.models.filter((model) => model.tokens > 0).length
+check(slices.length === hoverableSlices, `every donut slice should be hoverable (${slices.length}/${hoverableSlices})`)
+check(slices.every((node) => node.props?.style?.cursor === 'pointer'), 'donut slices should show a pointer cursor')
+check(
+  slices.some((node) => Array.isArray(node.children) && node.children.some((child) => child?.type === 'title' && collectText(child).join('').includes('Model A'))),
+  'donut slices should carry a native title with the model label',
+)
+for (const slice of slices) {
+  // Shape check: the handler must survive without a mounted ref (null layout box).
+  slice.props.onMouseEnter({ clientX: 16, clientY: 16 })
+  slice.props.onMouseLeave()
+}
+
 const cells = []
 walk(heatTree, (node) => { if (node.props?.className === 'dstu-heatCell') cells.push(node) })
 check(cells.length === heat.cells.length, 'rendered heat cell count')
