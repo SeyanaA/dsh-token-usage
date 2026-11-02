@@ -955,7 +955,7 @@ window.__ModuleLoader__.load({
           setNotice('统计已清除 · 自 ' + fmtDateTime(at) + ' 起重新累计')
         } catch (failure) {
           const message = failure instanceof Error ? failure.message : String(failure)
-          setError(message.includes('404')
+          setError(/HTTP (401|403|404|405)/.test(message)
             ? '清除失败：宿主端还是旧版本，请重启 DSH 后重试。'
             : '清除失败：' + message)
         } finally {
