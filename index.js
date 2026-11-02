@@ -46,10 +46,11 @@ export const inject = ['webServer']
 export const ROUTES = {
   overview: '/api/dsh-token-usage/overview',
   hello: '/api/dsh-token-usage/hello',
+  clear: '/api/dsh-token-usage/clear',
 }
 
 /** Cache-file format; bump to invalidate every cached fold. */
-const CACHE_VERSION = 2
+const CACHE_VERSION = 3
 
 /** A chat block ends after this long without an event. */
 const BLOCK_GAP_MS = 10 * 60 * 1000
@@ -278,9 +279,10 @@ export function prettyProviderName(id) {
  *
  * @param {object} header - the Session header (`{id, createdAt, ...}`).
  * @param {readonly object[]} events - the raw Session log events.
+ * @param {number} since - only usage at or after this epoch-ms counts (0 = all).
  * @returns the fold, safe to persist as JSON.
  */
-export function aggregateSession(header, events) {
+export function aggregateSession(header, events, since = 0) {
   const stepModels = new Map()
   const days = Object.create(null)
   const dayModels = Object.create(null)
@@ -292,7 +294,8 @@ export function aggregateSession(header, events) {
   for (const event of events) {
     if (event === null || typeof event !== 'object') continue
     const time = event.time
-    if (typeof time === 'number' && Number.isFinite(time)) times.push(time)
+    const readableTime = typeof time === 'number' && Number.isFinite(time) ? time : undefined
+    if (readableTime !== undefined && readableTime >= since) times.push(readableTime)
     const data = event.data
     if (event.type === 'request/header') {
       const config = data?.header?.config
@@ -308,6 +311,8 @@ export function aggregateSession(header, events) {
       continue
     }
     if (event.type !== 'assistant/message') continue
+    // A cleared dashboard only counts usage that happened after the reset.
+    if (readableTime !== undefined && readableTime < since) continue
     const usage = data?.usage
     if (usage === null || typeof usage !== 'object') continue
     let tokens = count(usage.totalTokens)
@@ -622,9 +627,9 @@ function liveSessionIds(ctx) {
  * @param {object} cached - the cache entry for this Session, if any.
  * @returns `{ entry, reused }`.
  */
-async function foldSnapshot(ctx, snapshot, cached) {
+async function foldSnapshot(ctx, snapshot, cached, since = 0) {
   const revision = snapshot.revision
-  if (cached !== undefined && cached.revision === revision && cached.fold !== undefined) {
+  if (cached !== undefined && cached.revision === revision && cached.since === since && cached.fold !== undefined) {
     return { entry: cached, reused: true }
   }
   const sessionQuery = typeof ctx.get === 'function' ? ctx.get('sessionQuery') : undefined
@@ -633,14 +638,14 @@ async function foldSnapshot(ctx, snapshot, cached) {
   }
   try {
     const log = await sessionQuery.readSession(snapshot.header.id)
-    const fold = aggregateSession(log.session ?? snapshot.header, log.events ?? [])
-    return { entry: { revision, fold }, reused: false }
+    const fold = aggregateSession(log.session ?? snapshot.header, log.events ?? [], since)
+    return { entry: { revision, since, fold }, reused: false }
   } catch (error) {
     // Keep the failure local to one Session: a corrupt or mid-migration log
     // must not take the dashboard down, and its revision stays cached so a
     // still log is not re-read on every request.
     return {
-      entry: { revision, fold: null, error: error instanceof Error ? error.message : String(error) },
+      entry: { revision, since, fold: null, error: error instanceof Error ? error.message : String(error) },
       reused: false,
     }
   }
@@ -668,10 +673,12 @@ async function mapLimit(items, limit, worker) {
  * @param {object} ctx - host plugin context.
  */
 export function apply(ctx) {
-  /** @type {Map<string, {revision: string, fold: object|null, error?: string}>} */
+  /** @type {Map<string, {revision: string, since: number, fold: object|null, error?: string}>} */
   const cache = new Map()
   let cacheDirty = false
   let cacheLoaded = false
+  /** Epoch-ms origin of the current statistics; 0 = the whole history. */
+  let clearedAt = 0
   let modelNamesCache = { at: 0, naming: null }
 
   const loadCache = () => {
@@ -679,11 +686,17 @@ export function apply(ctx) {
     cacheLoaded = true
     const saved = readJsonFile(cacheFile())
     if (saved === null || saved === undefined || saved.version !== CACHE_VERSION || typeof saved.sessions !== 'object' || saved.sessions === null) return
+    clearedAt = typeof saved.clearedAt === 'number' && Number.isFinite(saved.clearedAt) && saved.clearedAt > 0
+      ? saved.clearedAt
+      : 0
     for (const [id, entry] of Object.entries(saved.sessions)) {
       if (entry === null || typeof entry !== 'object') continue
       if (typeof entry.revision !== 'string') continue
+      // A fold built for another statistics origin is not reusable.
+      if (entry.since !== clearedAt) continue
       cache.set(id, {
         revision: entry.revision,
+        since: clearedAt,
         fold: entry.fold ?? null,
         ...entry.error === undefined ? {} : { error: entry.error },
       })
@@ -695,9 +708,14 @@ export function apply(ctx) {
     cacheDirty = false
     const sessions = Object.create(null)
     for (const [id, entry] of cache) {
-      sessions[id] = { revision: entry.revision, fold: entry.fold, ...entry.error === undefined ? {} : { error: entry.error } }
+      sessions[id] = {
+        revision: entry.revision,
+        since: entry.since ?? clearedAt,
+        fold: entry.fold,
+        ...entry.error === undefined ? {} : { error: entry.error },
+      }
     }
-    writeJsonFile(cacheFile(), { version: CACHE_VERSION, savedAt: new Date().toISOString(), sessions })
+    writeJsonFile(cacheFile(), { version: CACHE_VERSION, clearedAt, savedAt: new Date().toISOString(), sessions })
   }
 
   const resolveModelNames = async () => {
@@ -740,7 +758,8 @@ export function apply(ctx) {
       const cached = cache.get(id)
       // A live Session's revision is frozen while its events are buffered, so
       // it is always re-read; everything else is revision-guarded.
-      if (!live.has(id) && cached !== undefined && cached.revision === snapshot.revision && cached.fold !== null) {
+      if (!live.has(id) && cached !== undefined && cached.revision === snapshot.revision
+        && cached.since === clearedAt && cached.fold !== null) {
         folds.push(cached.fold)
         reusedCount += 1
         continue
@@ -749,7 +768,7 @@ export function apply(ctx) {
     }
     const resolved = await mapLimit(queue, READ_CONCURRENCY, async ({ snapshot, cached }) => {
       const id = snapshot.header.id
-      const result = await foldSnapshot(ctx, snapshot, cached)
+      const result = await foldSnapshot(ctx, snapshot, cached, clearedAt)
       cache.set(id, result.entry)
       cacheDirty = true
       if (result.reused) reusedCount += 1
@@ -804,10 +823,25 @@ export function apply(ctx) {
         return
       }
       try {
+        // `refresh=1` is the manual refresh: drop the fold and catalog caches so
+        // the next collection re-reads every Session log and the provider list.
+        if (queryParam(req.url, 'refresh') === '1') {
+          if (foldsInFlight !== null) {
+            try {
+              await foldsInFlight
+            } catch (error) {
+              // The forced collection below reports its own failure.
+            }
+          }
+          cache.clear()
+          cacheDirty = true
+          cacheLoaded = true
+          modelNamesCache = { at: 0, naming: null }
+        }
         const { folds, stats } = await ensureFolds()
         const range = Number(queryParam(req.url, 'range')) === 7 ? 7 : 30
         const naming = await resolveModelNames()
-        const overview = buildOverview(folds, range, naming, localDayKey(Date.now()))
+        const overview = { ...buildOverview(folds, range, naming, localDayKey(Date.now())), clearedAt }
         const diag = queryParam(req.url, 'diag') === '1'
         sendJson(res, 200, diag
           ? { ...overview, cache: stats, client: lastClientHello, catalog: { providers: naming.providers } }
@@ -817,4 +851,41 @@ export function apply(ctx) {
       }
     },
   }), 'dsh-token-usage: overview route')
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: ROUTES.clear,
+    handler: async (req, res) => {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: 'POST only' })
+        return
+      }
+      const contentType = String(req.headers?.['content-type'] ?? '').toLowerCase()
+      // A JSON body requirement keeps cross-site form posts out; the dashboard
+      // is the only intended caller.
+      if (!contentType.startsWith('application/json')) {
+        sendJson(res, 415, { ok: false, error: 'application/json required' })
+        return
+      }
+      req.resume()
+      try {
+        if (foldsInFlight !== null) {
+          try {
+            await foldsInFlight
+          } catch (error) {
+            // A failed collection cannot hold up the reset.
+          }
+        }
+        clearedAt = Date.now()
+        cache.clear()
+        cacheDirty = true
+        cacheLoaded = true
+        modelNamesCache = { at: 0, naming: null }
+        persistCache()
+        sendJson(res, 200, { ok: true, clearedAt })
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    },
+  }), 'dsh-token-usage: clear route')
 }

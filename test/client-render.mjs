@@ -183,6 +183,32 @@ const paths = []
 walk(trendTree, (node) => { if (node.type === 'path' && typeof node.props?.d === 'string' && node.props.d.length > 10) paths.push(node.props.d) })
 check(paths.length >= 1, 'trend chart has no series path')
 
+// The dashboard toolbar carries the two explicit actions.
+check(/^\d{2}-\d{2} \d{2}:\d{2}$/.test(api.fmtDateTime(Date.now())), 'fmtDateTime shape')
+const toolbarText = collectText(api.DashboardToolbar({ busy: false, updatedAt: Date.now(), clearedAt: 0 })).join(' ')
+check(toolbarText.includes('清除统计'), 'toolbar clear button copy missing')
+check(toolbarText.includes('刷新'), 'toolbar refresh button copy missing')
+const busyToolbar = collectText(api.DashboardToolbar({ busy: true, updatedAt: 0, clearedAt: 0 })).join(' ')
+check(busyToolbar.includes('刷新中…'), 'busy toolbar should show the refresh progress label')
+const clearedToolbar = collectText(api.DashboardToolbar({ busy: false, updatedAt: 0, clearedAt: Date.now() })).join(' ')
+check(clearedToolbar.includes('统计起点'), 'toolbar should show the statistics origin after a clear')
+const toolbarButtons = []
+walk(api.DashboardToolbar({}), (node) => { if (node.type === 'button') toolbarButtons.push(node) })
+check(toolbarButtons.length === 2, `toolbar should have two buttons, got ${toolbarButtons.length}`)
+const clearButton = toolbarButtons.find((node) => collectText(node).join('').includes('清除统计'))
+const refreshButton = toolbarButtons.find((node) => collectText(node).join('').includes('刷新'))
+check(clearButton !== undefined && refreshButton !== undefined, 'toolbar buttons are not identifiable')
+let clearedClicks = 0
+let refreshedClicks = 0
+api.DashboardToolbar({ onClear: () => { clearedClicks += 1 }, onRefresh: () => { refreshedClicks += 1 } })
+const wired = []
+walk(api.DashboardToolbar({ onClear: () => { clearedClicks += 1 }, onRefresh: () => { refreshedClicks += 1 } }), (node) => {
+  if (node.type === 'button') wired.push(node)
+})
+wired.find((node) => collectText(node).join('').includes('清除统计')).props.onClick()
+wired.find((node) => collectText(node).join('').includes('刷新')).props.onClick()
+check(clearedClicks === 1 && refreshedClicks === 1, 'toolbar callbacks are not wired')
+
 // The page's first paint (data null, no error) must be the loading card.
 const pageText = collectText(api.Dashboard({})).join(' ')
 check(pageText.includes('正在读取会话用量'), 'first paint is not the loading state: ' + pageText.slice(0, 80))
@@ -192,4 +218,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error('  - ' + failure)
   process.exit(1)
 }
-console.log('client-render: PASS (slots + two-stage hello + charts + first paint)')
+console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + first paint)')

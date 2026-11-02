@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const tests = ['host-fold.mjs', 'client-render.mjs']
+const tests = ['host-fold.mjs', 'host-routes.mjs', 'client-render.mjs']
 let failed = 0
 for (const test of tests) {
   const result = spawnSync(process.execPath, [join(here, test)], { stdio: 'inherit' })

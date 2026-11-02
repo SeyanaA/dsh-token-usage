@@ -38,8 +38,11 @@ window.__ModuleLoader__.load({
     /** The host half's client-load observation route. */
     const HELLO_ROUTE = '/api/dsh-token-usage/hello'
 
+    /** Resets the statistics origin (the host keeps session logs untouched). */
+    const CLEAR_ROUTE = '/api/dsh-token-usage/clear'
+
     /** This half's version, sent with the hello. */
-    const VERSION = '0.1.0'
+    const VERSION = '0.2.0'
 
     /** Accent + categorical palette for the model series. */
     const ACCENT = '#4d6bfe'
@@ -95,6 +98,14 @@ window.__ModuleLoader__.load({
       if (hours > 0) parts.push(hours + '小时')
       if (minutes > 0 && days === 0) parts.push(minutes + '分钟')
       return parts.length === 0 ? '不到1分钟' : parts.join('')
+    }
+
+    /** Format an epoch-ms value as `MM-DD HH:mm` in local time. */
+    function fmtDateTime(ms) {
+      const date = new Date(ms)
+      const pad = (value) => String(value).padStart(2, '0')
+      return pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' '
+        + pad(date.getHours()) + ':' + pad(date.getMinutes())
     }
 
     /** `2026-10-25` → `10月25日`. */
@@ -812,6 +823,76 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    /** The small trash glyph on the clear-statistics button. */
+    function TrashGlyph() {
+      return h('svg', {
+        width: 14,
+        height: 14,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        'aria-hidden': 'true',
+      }, [
+        h('path', {
+          key: 'lid',
+          d: 'M3.2 4.6h9.6M6.2 4.6V3.4h3.6v1.2',
+          stroke: 'currentColor',
+          strokeWidth: 1.3,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        }),
+        h('path', {
+          key: 'body',
+          d: 'M4.3 4.6l.6 7.3c.05.6.56 1.1 1.2 1.1h3.8c.64 0 1.15-.5 1.2-1.1l.6-7.3',
+          stroke: 'currentColor',
+          strokeWidth: 1.3,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        }),
+      ])
+    }
+
+    /**
+     * The dashboard's top toolbar: freshness of the data, the statistics
+     * origin, and the two explicit actions (clear / refresh).
+     */
+    function DashboardToolbar(props) {
+      const busy = props?.busy === true
+      const notice = typeof props?.notice === 'string' ? props.notice : ''
+      const updatedAt = typeof props?.updatedAt === 'number' ? props.updatedAt : 0
+      const clearedAt = typeof props?.clearedAt === 'number' && props.clearedAt > 0 ? props.clearedAt : 0
+      const status = notice !== ''
+        ? notice
+        : updatedAt > 0
+          ? '更新于 ' + new Date(updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+          : '正在读取…'
+      return h('div', { className: 'dstu-toolbar' }, [
+        h('div', { key: 'meta', className: 'dstu-toolbarMeta' }, [
+          h('span', { key: 'status', className: 'dstu-muted' }, status),
+          clearedAt > 0
+            ? h('span', { key: 'since', className: 'dstu-muted' }, '统计起点：' + fmtDateTime(clearedAt))
+            : null,
+        ]),
+        h('div', { key: 'actions', className: 'dstu-toolbarActions' }, [
+          h('button', {
+            key: 'clear',
+            type: 'button',
+            className: 'dstu-clear',
+            disabled: busy,
+            title: '只重置本插件的统计起点，不删除 DSH 的会话记录',
+            onClick: () => props?.onClear?.(),
+          }, [h(TrashGlyph, { key: 'icon' }), '清除统计']),
+          h('button', {
+            key: 'refresh',
+            type: 'button',
+            className: 'dstu-refresh dstu-refreshPrimary',
+            disabled: busy,
+            title: '重新读取最新的会话用量',
+            onClick: () => props?.onRefresh?.(),
+          }, [h(RefreshGlyph, { key: 'icon' }), busy ? '刷新中…' : '刷新']),
+        ]),
+      ])
+    }
+
     /** The full dashboard page. */
     function Dashboard() {
       const [range, setRange] = React.useState(30)
@@ -819,6 +900,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       const [busy, setBusy] = React.useState(false)
       const [updatedAt, setUpdatedAt] = React.useState(0)
+      const [notice, setNotice] = React.useState('')
 
       const load = React.useCallback(async (nextRange, force) => {
         setBusy(true)
@@ -847,6 +929,40 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         void load(range, false)
       }, [range, load])
+
+      /** Reset the statistics origin, then re-read so the page shows the new one. */
+      const clearStats = React.useCallback(async () => {
+        if (busy) return
+        const question = '清除统计只会重置本插件的统计起点，不会删除 DSH 的会话记录。确定继续？'
+        if (typeof window.confirm === 'function' && window.confirm(question) !== true) return
+        setBusy(true)
+        setError('')
+        try {
+          const response = await fetch(CLEAR_ROUTE, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-dsh-token-usage-client': '1' },
+            body: '{}',
+            cache: 'no-store',
+          })
+          if (!response.ok) throw new Error('HTTP ' + String(response.status))
+          const payload = await response.json()
+          if (payload === null || typeof payload !== 'object' || payload.ok !== true) {
+            throw new Error(payload !== null && typeof payload === 'object' && typeof payload.error === 'string'
+              ? payload.error
+              : '清除失败')
+          }
+          const at = typeof payload.clearedAt === 'number' ? payload.clearedAt : Date.now()
+          setNotice('统计已清除 · 自 ' + fmtDateTime(at) + ' 起重新累计')
+        } catch (failure) {
+          const message = failure instanceof Error ? failure.message : String(failure)
+          setError(message.includes('404')
+            ? '清除失败：宿主端还是旧版本，请重启 DSH 后重试。'
+            : '清除失败：' + message)
+        } finally {
+          setBusy(false)
+        }
+        void load(range, true)
+      }, [busy, load, range])
 
       if (data === null) {
         // First paint has no data yet: the fetch is started by the effect below,
@@ -891,6 +1007,19 @@ window.__ModuleLoader__.load({
       const empty = (totals.tokens ?? 0) === 0
 
       return h('div', { className: 'dstu-root' }, [
+        h(DashboardToolbar, {
+          key: 'toolbar',
+          busy,
+          notice,
+          updatedAt,
+          clearedAt: data.clearedAt,
+          onClear: () => void clearStats(),
+          onRefresh: () => {
+            setNotice('')
+            void load(range, true)
+          },
+        }),
+
         h('div', { key: 'stats', className: 'dstu-stats' }, statCards.map((card) => h(StatCard, {
           key: card.key,
           label: card.label,
@@ -921,21 +1050,10 @@ window.__ModuleLoader__.load({
         h(ModelShare, { key: 'models', models: data.models ?? [], total: data.rangeTokens ?? 0 }),
 
         empty
-          ? h('div', { key: 'empty', className: 'dstu-muted' }, '还没有记录到 token 用量 —— 完成一次模型对话后刷新即可看到。')
+          ? h('div', { key: 'empty', className: 'dstu-muted' }, data.clearedAt
+            ? '统计已清除 · 自 ' + fmtDateTime(data.clearedAt) + ' 起重新累计；完成一次模型对话后刷新即可看到新用量。'
+            : '还没有记录到 token 用量 —— 完成一次模型对话后刷新即可看到。')
           : null,
-
-        h('div', { key: 'refresh', className: 'dstu-refreshRow' }, [
-          h('span', { key: 'meta', className: 'dstu-muted' }, updatedAt > 0
-            ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
-            : ''),
-          h('button', {
-            key: 'button',
-            type: 'button',
-            className: 'dstu-refresh',
-            disabled: busy,
-            onClick: () => void load(range, true),
-          }, [h(RefreshGlyph, { key: 'icon' }), busy ? '刷新中…' : '刷新']),
-        ]),
       ])
     }
 
@@ -1044,7 +1162,14 @@ window.__ModuleLoader__.load({
         '.dstu-modelName{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.dstu-modelTokens{font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
         '.dstu-modelShare{flex:none;width:62px;text-align:right;font-size:13px;color:var(--dsw-alias-label-secondary,#9aa0a6);font-variant-numeric:tabular-nums}',
-        '.dstu-refreshRow{display:flex;align-items:center;justify-content:flex-end;gap:12px}',
+        '.dstu-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}',
+        '.dstu-toolbarMeta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}',
+        '.dstu-toolbarActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+        '.dstu-clear{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dsw-alias-border-l4,rgba(255,255,255,.16));background:transparent;color:var(--dsw-alias-label-secondary,#cfd3d6);border-radius:10px;padding:7px 14px;font:inherit;font-size:12px;cursor:pointer}',
+        '.dstu-clear:hover:not(:disabled){background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.42);color:#ef4444}',
+        '.dstu-clear:disabled{opacity:.55;cursor:default}',
+        '.dstu-refreshPrimary{border-color:rgba(77,107,254,.5);color:var(--dsw-alias-state-business-primary,#4d6bfe)}',
+        '.dstu-refreshPrimary:hover:not(:disabled){background:rgba(77,107,254,.12)}',
         '.dstu-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dsw-alias-border-l4,rgba(255,255,255,.16));background:transparent;color:var(--dsw-alias-label-secondary,#cfd3d6);border-radius:10px;padding:7px 14px;font:inherit;font-size:12px;cursor:pointer}',
         '.dstu-refresh:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.14))}',
         '.dstu-refresh:disabled{opacity:.55;cursor:default}',
@@ -1112,6 +1237,8 @@ window.__ModuleLoader__.load({
       TrendChart,
       ModelShare,
       Dashboard,
+      DashboardToolbar,
+      fmtDateTime,
     }
 
     return module.exports

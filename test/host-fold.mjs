@@ -160,6 +160,17 @@ check(rawLabels.includes('Model A · DeepSeek'), 'deepseek-official should read 
 
 
 
+// A cleared statistics origin only counts usage recorded after it.
+const clearedOrigin = at(0, 0, 0)
+const sinceFold = aggregateSession(header, events, clearedOrigin)
+check(sinceFold.totalTokens === 2000, `since fold total ${sinceFold.totalTokens}, expected 2000`)
+check(!(dayKey(-1) in sinceFold.days), 'usage before the cleared origin must be dropped')
+check(sinceFold.days[dayKey(0)] === 2000, 'usage after the cleared origin must survive')
+const sinceOverview = buildOverview([sinceFold], 7, names, dayKey(0))
+check(sinceOverview.totals.tokens === 2000, 'cleared overview totals')
+check(sinceOverview.totals.currentStreak === 1, 'cleared overview streak should start at the origin')
+check(sinceOverview.totals.peakDayTokens === 2000, 'cleared overview peak day')
+
 if (failures.length > 0) {
   console.error('host-fold: FAIL')
   for (const failure of failures) console.error('  - ' + failure)
