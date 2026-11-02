@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
     const CLEAR_ROUTE = '/api/dsh-token-usage/clear'
 
     /** This half's version, sent with the hello. */
-    const VERSION = '0.2.1'
+    const VERSION = '0.2.2'
 
     /** Accent + categorical palette for the model series. */
     const ACCENT = '#4d6bfe'
@@ -125,6 +125,39 @@ window.__ModuleLoader__.load({
     function fmtShare(share) {
       if (typeof share !== 'number' || !Number.isFinite(share) || share <= 0) return '0%'
       return trimZeros((share * 100).toFixed(1)) + '%'
+    }
+
+    /**
+     * The two averages the summary row shows.
+     *
+     * - 每日平均 = 当前选取区间的总量 ÷ 区间总天数（近 7 日 ÷ 7，近 30 日 ÷ 30），
+     *   as the user asked: the divisor is the range's full length, not active days.
+     * - 当日每小时平均 = 今日累计 ÷ 今天已过的小时数（不足 1 小时按 1 小时计）。
+     *
+     * @param {object} overview - the `/overview` document.
+     * @param {number} nowMs - current epoch-ms, injected so tests are deterministic.
+     * @returns the averages plus the pieces they were derived from.
+     */
+    function buildTokenAverages(overview, nowMs) {
+      const source = overview !== null && typeof overview === 'object' ? overview : {}
+      const rangeDays = Number(source.range) === 7 ? 7 : 30
+      const rangeTokens = typeof source.rangeTokens === 'number' && Number.isFinite(source.rangeTokens) && source.rangeTokens > 0
+        ? source.rangeTokens
+        : 0
+      const dailyAverage = rangeDays > 0 ? rangeTokens / rangeDays : 0
+      const todayKey = typeof source.today === 'string' ? source.today : ''
+      let todayTokens = 0
+      const days = source.trend !== null && source.trend !== undefined && Array.isArray(source.trend.days) ? source.trend.days : []
+      for (const day of days) {
+        if (day !== null && day !== undefined && day.d === todayKey && typeof day.t === 'number' && Number.isFinite(day.t) && day.t > 0) {
+          todayTokens = day.t
+          break
+        }
+      }
+      const now = new Date(typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now())
+      const elapsedHours = Math.max(1, now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600)
+      const hourlyAverage = todayTokens / elapsedHours
+      return { rangeDays, rangeTokens, dailyAverage, todayTokens, elapsedHours, hourlyAverage }
     }
 
     /**
@@ -849,8 +882,11 @@ window.__ModuleLoader__.load({
 
     /** One whole-history stat card. */
     function StatCard(props) {
+      const value = typeof props.unit === 'string' && props.unit !== ''
+        ? [props.value, h('span', { key: 'unit', className: 'dstu-statUnit' }, props.unit)]
+        : props.value
       return h('div', { className: 'dstu-card dstu-stat', title: props.title ?? undefined }, [
-        h('span', { key: 'value', className: 'dstu-statValue' }, props.value),
+        h('span', { key: 'value', className: 'dstu-statValue' }, value),
         h('span', { key: 'label', className: 'dstu-statLabel' }, props.label),
       ])
     }
@@ -1063,8 +1099,23 @@ window.__ModuleLoader__.load({
       const names = {}
       for (const model of data.models ?? []) names[model.key ?? model.id] = model.label ?? model.name
 
+      const averages = buildTokenAverages(data, Date.now())
       const statCards = [
         { key: 'total', label: '累计 Token 数', value: fmtTokens(totals.tokens), title: '全部会话累计' },
+        {
+          key: 'daily',
+          label: '每日平均',
+          value: fmtTokens(averages.dailyAverage),
+          unit: '/天',
+          title: `近 ${averages.rangeDays} 日总量 ${fmtTokens(averages.rangeTokens)} ÷ ${averages.rangeDays} 天`,
+        },
+        {
+          key: 'hourly',
+          label: '当日每小时平均',
+          value: fmtTokens(averages.hourlyAverage),
+          unit: '/小时',
+          title: `今日累计 ${fmtTokens(averages.todayTokens)} ÷ 已过 ${Math.max(1, Math.round(averages.elapsedHours))} 小时（不足 1 小时按 1 小时计）`,
+        },
         {
           key: 'peak',
           label: '峰值 Token 数',
@@ -1194,7 +1245,8 @@ window.__ModuleLoader__.load({
         '.dstu-root{display:flex;flex-direction:column;gap:16px;height:100%;overflow-y:auto;box-sizing:border-box;padding:22px 26px 36px;color:var(--dsw-alias-label-primary,#111)}',
         '.dstu-root *{box-sizing:border-box}',
         '.dstu-card{background:var(--dsw-alias-bg-layer-1,#1f1f22);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08));border-radius:16px;padding:20px}',
-        '.dstu-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}',
+        '.dstu-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}',
+        '.dstu-statUnit{font-size:12px;font-weight:500;color:var(--dsw-alias-label-tertiary,#8a8f98);margin-left:3px;letter-spacing:0}',
         '.dstu-stat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:22px 14px;text-align:center}',
         '.dstu-statValue{font-size:28px;font-weight:650;line-height:1.15;letter-spacing:.2px}',
         '.dstu-statLabel{font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
@@ -1334,6 +1386,8 @@ window.__ModuleLoader__.load({
       persistModelColors,
       colorForModel,
       COLOR_KEY,
+      buildTokenAverages,
+      StatCard,
     }
 
     return module.exports

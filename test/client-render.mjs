@@ -183,6 +183,33 @@ const paths = []
 walk(trendTree, (node) => { if (node.type === 'path' && typeof node.props?.d === 'string' && node.props.d.length > 10) paths.push(node.props.d) })
 check(paths.length >= 1, 'trend chart has no series path')
 
+// The two average cards: range total ÷ range days, and today's total ÷ elapsed hours.
+const noon = new Date(2026, 10, 2, 12, 0, 0)
+const averageBase = {
+  range: 7,
+  rangeTokens: 7000,
+  today: '2026-11-02',
+  trend: { days: [{ d: '2026-11-01', t: 100 }, { d: '2026-11-02', t: 2400 }] },
+}
+const sevenDayAverage = api.buildTokenAverages(averageBase, noon.getTime())
+check(sevenDayAverage.rangeDays === 7 && sevenDayAverage.dailyAverage === 1000, 'seven-day average must divide by 7')
+check(sevenDayAverage.todayTokens === 2400, 'today tokens come from the trend day')
+check(Math.abs(sevenDayAverage.hourlyAverage - 200) < 1e-9, 'hourly average must divide by elapsed hours')
+const thirtyDayAverage = api.buildTokenAverages({ ...averageBase, range: 30, rangeTokens: 30000 }, noon.getTime())
+check(thirtyDayAverage.rangeDays === 30 && thirtyDayAverage.dailyAverage === 1000, 'thirty-day average must divide by 30')
+const midnightAverage = api.buildTokenAverages(
+  { range: 7, rangeTokens: 0, today: '2026-11-02', trend: { days: [{ d: '2026-11-02', t: 1200 }] } },
+  new Date(2026, 10, 2, 0, 0, 0).getTime(),
+)
+check(midnightAverage.hourlyAverage === 1200, 'before an hour has passed the divisor is clamped to 1')
+const emptyAverage = api.buildTokenAverages(
+  { range: 7, rangeTokens: 0, today: '2026-11-03', trend: { days: [{ d: '2026-11-02', t: 900 }] } },
+  noon.getTime(),
+)
+check(emptyAverage.dailyAverage === 0 && emptyAverage.todayTokens === 0 && emptyAverage.hourlyAverage === 0, 'empty data averages are zero')
+const unitCard = api.StatCard({ value: '100', unit: '/天', label: '每日平均' })
+check(collectText(unitCard).join('').includes('/天'), 'stat cards should render their unit')
+
 // Per-model colour overrides drive the donut, the legend pickers and the trend.
 const colorMap = { 'p\u0001model-a': '#123456' }
 check(api.colorForModel('p\u0001model-a', 0, {}) === '#4d6bfe', 'default model colour')
@@ -254,4 +281,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error('  - ' + failure)
   process.exit(1)
 }
-console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + model colours + first paint)')
+console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + averages + model colours + first paint)')
