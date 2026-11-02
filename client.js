@@ -42,11 +42,55 @@ window.__ModuleLoader__.load({
     const CLEAR_ROUTE = '/api/dsh-token-usage/clear'
 
     /** This half's version, sent with the hello. */
-    const VERSION = '0.2.0'
+    const VERSION = '0.2.1'
 
     /** Accent + categorical palette for the model series. */
     const ACCENT = '#4d6bfe'
     const PALETTE = ['#4d6bfe', '#22c55e', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#eab308', '#ec4899']
+
+    /** Where per-model colour overrides are remembered. */
+    const COLOR_KEY = 'dsh-token-usage:model-colors'
+
+    /** @returns the persisted `{ [modelKey]: '#rrggbb' }` overrides, sanitised. */
+    function readModelColors() {
+      try {
+        const raw = globalThis.localStorage?.getItem(COLOR_KEY)
+        if (typeof raw !== 'string' || raw === '') return {}
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+        const clean = {}
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) clean[key] = value.toLowerCase()
+        }
+        return clean
+      } catch (error) {
+        return {}
+      }
+    }
+
+    /** @param overrides - the map to remember. */
+    function persistModelColors(overrides) {
+      try {
+        globalThis.localStorage?.setItem(COLOR_KEY, JSON.stringify(overrides ?? {}))
+      } catch (error) {
+        // A blocked storage only costs the preference.
+      }
+    }
+
+    /**
+     * The colour one model series uses: the user's override, else the palette.
+     * @param key - the aggregation key (`provider\u0001model`).
+     * @param index - the model's position in the dashboard ordering.
+     * @param overrides - the persisted per-model colours.
+     * @returns a `#rrggbb` colour.
+     */
+    function colorForModel(key, index, overrides) {
+      const chosen = overrides !== null && overrides !== undefined && typeof overrides === 'object'
+        ? overrides[key]
+        : undefined
+      if (typeof chosen === 'string' && /^#[0-9a-f]{6}$/i.test(chosen)) return chosen.toLowerCase()
+      return PALETTE[Math.abs(Number(index) || 0) % PALETTE.length]
+    }
 
     const zh = {
       'panel.label': 'Token 用量',
@@ -487,7 +531,7 @@ window.__ModuleLoader__.load({
       const series = modelIdsToDraw.map((id, index) => ({
         id,
         name: names[id] ?? String(id).replace('\u0001', ' · '),
-        color: PALETTE[(colorIndex.get(id) ?? index) % PALETTE.length],
+        color: colorForModel(id, colorIndex.get(id) ?? index, props.colors),
         values: days.map((day) => (day.m !== undefined && day.m !== null ? (day.m[id] ?? 0) : 0)),
       }))
       let max = 1
@@ -631,6 +675,9 @@ window.__ModuleLoader__.load({
     function ModelShare(props) {
       const models = props.models ?? []
       const total = props.total ?? 0
+      const colors = props.colors ?? {}
+      const colorOf = (model, index) => colorForModel(model.key ?? model.id, index, colors)
+      const hasOverrides = Object.keys(colors).length > 0
       const [hover, setHover] = React.useState(null)
       const wrapRef = React.useRef(null)
       const size = 240
@@ -668,7 +715,7 @@ window.__ModuleLoader__.load({
           cy: center,
           r: radius,
           fill: 'none',
-          stroke: PALETTE[index % PALETTE.length],
+          stroke: colorOf(model, index),
           strokeWidth: active ? stroke + 6 : stroke,
           strokeDasharray: `${Math.max(0.5, length - 1.5)} ${circumference}`,
           strokeDashoffset: -offset * circumference,
@@ -743,7 +790,7 @@ window.__ModuleLoader__.load({
         h('span', {
           key: 'dot',
           className: 'dstu-legendDot',
-          style: { background: PALETTE[hover.index % PALETTE.length] },
+          style: { background: colorOf(tipModel, hover.index) },
         }),
         h('span', { key: 'meta', style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } }, [
           h('span', {
@@ -760,10 +807,14 @@ window.__ModuleLoader__.load({
       const legend = h('div', { className: 'dstu-donutLegend' }, models.length === 0
         ? [h('div', { key: 'empty', className: 'dstu-muted' }, '这段时间还没有模型用量')]
         : models.map((model, index) => h('div', { key: model.key ?? model.id, className: 'dstu-modelRow' }, [
-          h('span', {
-            key: 'dot',
-            className: 'dstu-modelDot',
-            style: { background: PALETTE[index % PALETTE.length] },
+          h('input', {
+            key: 'color',
+            type: 'color',
+            className: 'dstu-modelColor',
+            value: colorOf(model, index),
+            title: '点击选择该模型的颜色',
+            'aria-label': '选择 ' + String(model.label ?? model.name ?? model.id) + ' 的颜色',
+            onChange: (event) => props?.onPickColor?.(model.key ?? model.id, event.target.value),
           }),
           h('div', { key: 'name', className: 'dstu-modelMeta' }, [
             h('div', { key: 'title', className: 'dstu-modelName', title: model.label ?? model.name }, model.label ?? model.name),
@@ -775,6 +826,15 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dstu-card' }, [
         h('div', { key: 'head', className: 'dstu-cardHead' }, [
           h('span', { key: 'title', className: 'dstu-cardTitle' }, '模型用量'),
+          hasOverrides
+            ? h('button', {
+              key: 'reset',
+              type: 'button',
+              className: 'dstu-resetColors',
+              title: '恢复所有模型为默认配色',
+              onClick: () => props?.onResetColors?.(),
+            }, '恢复默认颜色')
+            : null,
         ]),
         h('div', { key: 'body', className: 'dstu-donutCard' }, [
           h('div', { key: 'donut', className: 'dstu-donutWrap', ref: wrapRef }, [donut, tooltip]),
@@ -901,6 +961,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [updatedAt, setUpdatedAt] = React.useState(0)
       const [notice, setNotice] = React.useState('')
+      const [modelColors, setModelColors] = React.useState(() => readModelColors())
 
       const load = React.useCallback(async (nextRange, force) => {
         setBusy(true)
@@ -929,6 +990,22 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         void load(range, false)
       }, [range, load])
+
+      /** Remember one model's chosen colour (and repaint both charts at once). */
+      const pickModelColor = React.useCallback((key, color) => {
+        if (typeof key !== 'string' || typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) return
+        setModelColors((previous) => {
+          const next = { ...previous, [key]: color.toLowerCase() }
+          persistModelColors(next)
+          return next
+        })
+      }, [])
+
+      /** Drop every override and go back to the palette. */
+      const resetModelColors = React.useCallback(() => {
+        persistModelColors({})
+        setModelColors({})
+      }, [])
 
       /** Reset the statistics origin, then re-read so the page shows the new one. */
       const clearStats = React.useCallback(async () => {
@@ -1045,9 +1122,17 @@ window.__ModuleLoader__.load({
           days: data.trend?.days ?? [],
           models: data.trend?.models ?? [],
           names,
+          colors: modelColors,
         }),
 
-        h(ModelShare, { key: 'models', models: data.models ?? [], total: data.rangeTokens ?? 0 }),
+        h(ModelShare, {
+          key: 'models',
+          models: data.models ?? [],
+          total: data.rangeTokens ?? 0,
+          colors: modelColors,
+          onPickColor: pickModelColor,
+          onResetColors: resetModelColors,
+        }),
 
         empty
           ? h('div', { key: 'empty', className: 'dstu-muted' }, data.clearedAt
@@ -1157,7 +1242,13 @@ window.__ModuleLoader__.load({
         '.dstu-donutUnit{fill:var(--dsw-alias-label-tertiary,#8a8f98);font-size:13px}',
         '.dstu-donutLegend{display:flex;flex-direction:column;gap:14px;min-width:0}',
         '.dstu-modelRow{display:flex;align-items:center;gap:10px;min-width:0}',
-        '.dstu-modelDot{flex:none;width:10px;height:10px;border-radius:50%}',
+        '.dstu-modelColor{flex:none;width:14px;height:14px;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;appearance:none;-webkit-appearance:none;overflow:hidden;transition:box-shadow .15s}',
+        '.dstu-modelColor:hover{box-shadow:0 0 0 2px rgba(128,128,128,.30)}',
+        '.dstu-modelColor:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4d6bfe);outline-offset:1px}',
+        '.dstu-modelColor::-webkit-color-swatch-wrapper{padding:0}',
+        '.dstu-modelColor::-webkit-color-swatch{border:0;border-radius:50%}',
+        '.dstu-resetColors{border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#8a8f98);font:inherit;font-size:12px;cursor:pointer;padding:2px 4px;border-radius:6px}',
+        '.dstu-resetColors:hover{color:var(--dsw-alias-state-business-primary,#4d6bfe);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.14))}',
         '.dstu-modelMeta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
         '.dstu-modelName{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.dstu-modelTokens{font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f98)}',
@@ -1239,6 +1330,10 @@ window.__ModuleLoader__.load({
       Dashboard,
       DashboardToolbar,
       fmtDateTime,
+      readModelColors,
+      persistModelColors,
+      colorForModel,
+      COLOR_KEY,
     }
 
     return module.exports

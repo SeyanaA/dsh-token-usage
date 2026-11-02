@@ -183,6 +183,42 @@ const paths = []
 walk(trendTree, (node) => { if (node.type === 'path' && typeof node.props?.d === 'string' && node.props.d.length > 10) paths.push(node.props.d) })
 check(paths.length >= 1, 'trend chart has no series path')
 
+// Per-model colour overrides drive the donut, the legend pickers and the trend.
+const colorMap = { 'p\u0001model-a': '#123456' }
+check(api.colorForModel('p\u0001model-a', 0, {}) === '#4d6bfe', 'default model colour')
+check(api.colorForModel('p\u0001model-a', 0, colorMap) === '#123456', 'override model colour')
+check(api.colorForModel('p\u0001model-a', 2, { bad: 'x' }) === '#f59e0b', 'invalid override falls back to palette')
+const pickedColours = []
+const coloredDonut = api.ModelShare({
+  models: overview.models,
+  total: overview.rangeTokens,
+  colors: colorMap,
+  onPickColor: (key, color) => pickedColours.push([key, color]),
+  onResetColors: () => pickedColours.push(['reset']),
+})
+const coloredArcs = []
+walk(coloredDonut, (node) => {
+  if (node.type === 'circle' && typeof node.props?.stroke === 'string' && node.props.stroke.startsWith('#')) coloredArcs.push(node.props.stroke)
+})
+check(coloredArcs.includes('#123456'), 'donut arcs should use the chosen colour')
+const colourInputs = []
+walk(coloredDonut, (node) => { if (node.type === 'input' && node.props?.type === 'color') colourInputs.push(node) })
+const colourInput = colourInputs.find((node) => node.props?.value === '#123456')
+check(colourInput !== undefined, 'legend colour picker should show the chosen colour')
+check(String(colourInput?.props?.title ?? '').includes('颜色'), 'legend colour picker should explain itself')
+colourInput.props.onChange({ target: { value: '#00ff00' } })
+check(pickedColours.some(([key, value]) => key === 'p\u0001model-a' && value === '#00ff00'), 'colour picker change should be reported')
+const colourButtons = []
+walk(coloredDonut, (node) => { if (node.type === 'button') colourButtons.push(node) })
+const resetButton = colourButtons.find((node) => collectText(node).join('').includes('恢复默认颜色'))
+check(resetButton !== undefined, 'reset-colours button should appear when overrides exist')
+resetButton.props.onClick()
+check(pickedColours.some(([key]) => key === 'reset'), 'reset should be reported')
+const coloredTrend = api.TrendChart({ days: trendDays, models: ['p\u0001model-a'], names, colors: colorMap })
+const trendStrokes = []
+walk(coloredTrend, (node) => { if (node.type === 'path' && typeof node.props?.stroke === 'string') trendStrokes.push(node.props.stroke) })
+check(trendStrokes.includes('#123456'), 'trend line should use the chosen colour')
+
 // The dashboard toolbar carries the two explicit actions.
 check(/^\d{2}-\d{2} \d{2}:\d{2}$/.test(api.fmtDateTime(Date.now())), 'fmtDateTime shape')
 const toolbarText = collectText(api.DashboardToolbar({ busy: false, updatedAt: Date.now(), clearedAt: 0 })).join(' ')
@@ -218,4 +254,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error('  - ' + failure)
   process.exit(1)
 }
-console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + first paint)')
+console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + model colours + first paint)')
