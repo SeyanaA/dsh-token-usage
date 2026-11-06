@@ -50,7 +50,7 @@ export const ROUTES = {
 }
 
 /** Cache-file format; bump to invalidate every cached fold. */
-const CACHE_VERSION = 3
+const CACHE_VERSION = 4
 
 /** A chat block ends after this long without an event. */
 const BLOCK_GAP_MS = 10 * 60 * 1000
@@ -284,9 +284,16 @@ export function prettyProviderName(id) {
  */
 export function aggregateSession(header, events, since = 0) {
   const stepModels = new Map()
+  // When each step started, so an assistant message's reply window is known:
+  // output tokens ÷ (message time − step start) is the model's tokens/s.
+  const stepStarts = new Map()
   const days = Object.create(null)
   const dayModels = Object.create(null)
   const models = Object.create(null)
+  // Per-model generation speed samples: { outputTokens, ms }.
+  const speeds = Object.create(null)
+  let speedOutputTokens = 0
+  let speedMs = 0
   const times = []
   let lastModel = null
   let totalTokens = 0
@@ -297,6 +304,13 @@ export function aggregateSession(header, events, since = 0) {
     const readableTime = typeof time === 'number' && Number.isFinite(time) ? time : undefined
     if (readableTime !== undefined && readableTime >= since) times.push(readableTime)
     const data = event.data
+    if (event.type === 'step/start') {
+      if (data !== null && data !== undefined && typeof data.turn === 'number' && typeof data.step === 'number'
+        && readableTime !== undefined) {
+        stepStarts.set(`${data.turn}:${data.step}`, readableTime)
+      }
+      continue
+    }
     if (event.type === 'request/header') {
       const config = data?.header?.config
       if (config !== null && typeof config === 'object' && typeof config.model === 'string' && config.model !== '') {
@@ -335,6 +349,21 @@ export function aggregateSession(header, events, since = 0) {
     days[day] = (days[day] ?? 0) + tokens
     models[composite] = (models[composite] ?? 0) + tokens
     totalTokens += tokens
+
+    // Speed sample: only when the reply window is known and the reply actually
+    // generated tokens (a zero-output step has no meaningful tokens/s).
+    const outputTokens = count(usage.outputTokens)
+    const startedAt = key === null ? undefined : stepStarts.get(key)
+    const sampleMs = outputTokens > 0 && startedAt !== undefined && readableTime !== undefined && readableTime > startedAt
+      ? readableTime - startedAt
+      : 0
+    if (sampleMs > 0) {
+      const bucket = speeds[composite] ?? (speeds[composite] = { outputTokens: 0, ms: 0 })
+      bucket.outputTokens += outputTokens
+      bucket.ms += sampleMs
+      speedOutputTokens += outputTokens
+      speedMs += sampleMs
+    }
   }
 
   times.sort((left, right) => left - right)
@@ -361,6 +390,9 @@ export function aggregateSession(header, events, since = 0) {
     days,
     dayModels,
     models,
+    speeds,
+    speedOutputTokens,
+    speedMs,
     longestBlockMs,
   }
 }
@@ -433,10 +465,21 @@ export function buildOverview(sessions, range, naming, today) {
   const days = Object.create(null)
   const dayModels = Object.create(null)
   const models = Object.create(null)
+  const speeds = Object.create(null)
+  let speedOutputTokens = 0
+  let speedMs = 0
   let longestChatMs = 0
   for (const session of sessions) {
     if (session === null || typeof session !== 'object') continue
     longestChatMs = Math.max(longestChatMs, count(session.longestBlockMs))
+    speedOutputTokens += count(session.speedOutputTokens)
+    speedMs += count(session.speedMs)
+    for (const [model, bucket] of Object.entries(session.speeds ?? {})) {
+      if (bucket === null || typeof bucket !== 'object') continue
+      const merged = speeds[model] ?? (speeds[model] = { outputTokens: 0, ms: 0 })
+      merged.outputTokens += count(bucket.outputTokens)
+      merged.ms += count(bucket.ms)
+    }
     for (const [day, tokens] of Object.entries(session.days ?? {})) {
       days[day] = (days[day] ?? 0) + count(tokens)
     }
@@ -540,8 +583,14 @@ export function buildOverview(sessions, range, naming, today) {
     const normalised = normalise(entry.name)
     nameCounts.set(normalised, (nameCounts.get(normalised) ?? 0) + 1)
   }
+  const speedFor = (key) => {
+    const bucket = speeds[key]
+    if (bucket === undefined || bucket.ms <= 0) return null
+    return (bucket.outputTokens / bucket.ms) * 1000
+  }
   const modelList = resolvedModels.map((entry) => ({
     ...entry,
+    tokensPerSecond: speedFor(entry.key),
     label: (nameCounts.get(normalise(entry.name)) ?? 0) > 1 && entry.providerName !== ''
       ? `${entry.name} · ${entry.providerName}`
       : entry.name,
@@ -563,6 +612,10 @@ export function buildOverview(sessions, range, naming, today) {
       longestStreak,
       sessions: sessions.length,
       activeDays: activeDays.length,
+      // Whole recorded history, as the user asked: output tokens ÷ generation time.
+      tokensPerSecond: speedMs > 0 ? (speedOutputTokens / speedMs) * 1000 : null,
+      outputTokens: speedOutputTokens,
+      generationMs: speedMs,
     },
     heatmap: { start: heatStart, end: heatEnd, days: heatDays },
     trend: { start: rangeStart, end: today, days: trendDays, models: trendModelIds },

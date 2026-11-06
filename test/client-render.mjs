@@ -117,12 +117,12 @@ const trendDays = Array.from({ length: 30 }, (_, index) => {
 const overview = {
   ok: true,
   range: 30,
-  totals: { tokens: 1e8, peakDayTokens: 5.5e7, peakDay: trendDays[0].d, longestChatMs: 11460000, currentStreak: 2, longestStreak: 6, sessions: 3, activeDays: 10 },
+  totals: { tokens: 1e8, peakDayTokens: 5.5e7, peakDay: trendDays[0].d, longestChatMs: 11460000, currentStreak: 2, longestStreak: 6, sessions: 3, activeDays: 10, tokensPerSecond: 3.33, outputTokens: 1400, generationMs: 420000 },
   heatmap: { days },
   trend: { days: trendDays, models: ['p\u0001model-a'] },
   models: [
-    { key: 'p\u0001model-a', id: 'model-a', provider: 'p', providerName: 'P', name: 'Model A', label: 'Model A', tokens: 5e7, share: 0.6 },
-    { key: 'q\u0001model-a', id: 'model-a', provider: 'q', providerName: 'Q', name: 'Model A', label: 'Model A · Q', tokens: 3.3e7, share: 0.4 },
+    { key: 'p\u0001model-a', id: 'model-a', provider: 'p', providerName: 'P', name: 'Model A', label: 'Model A', tokens: 5e7, share: 0.6, tokensPerSecond: 4 },
+    { key: 'q\u0001model-a', id: 'model-a', provider: 'q', providerName: 'Q', name: 'Model A', label: 'Model A · Q', tokens: 3.3e7, share: 0.4, tokensPerSecond: 120 },
   ],
   rangeTokens: 8.3e7,
 }
@@ -143,6 +143,13 @@ const walk = (node, visit) => {
   if (Array.isArray(node.children)) for (const child of node.children) walk(child, visit)
 }
 
+check(api.fmtSpeed(3.3333) === '3.3', 'fmtSpeed under 100 keeps one decimal')
+check(api.fmtSpeed(120.6) === '121', 'fmtSpeed over 100 rounds')
+check(api.fmtSpeed(1500) === '1.5k', 'fmtSpeed over 1000 compacts')
+check(api.fmtSpeed(null) === '—' && api.fmtSpeed(0) === '—', 'fmtSpeed without samples is a dash')
+const speedCard = api.StatCard({ value: api.fmtSpeed(3.33), unit: ' tok/s', label: '平均吐字速度' })
+check(collectText(speedCard).join('').includes('tok/s'), 'speed stat card should carry its unit')
+
 const heatTree = api.Heatmap({ days })
 const trendTree = api.TrendChart({ days: trendDays, models: ['p\u0001model-a'], names })
 const donutTree = api.ModelShare({ models: overview.models, total: overview.rangeTokens })
@@ -151,6 +158,10 @@ check(collectText(trendTree).join(' ').includes('每日 Token 趋势图'), 'tren
 check(collectText(donutTree).join(' ').includes('模型用量'), 'donut title missing')
 check(collectText(donutTree).join(' ').includes('Model A'), 'donut legend missing model')
 check(collectText(donutTree).join(' ').includes('Model A · Q'), 'same-name models must be annotated with their provider')
+const donutText = collectText(donutTree).join(' ')
+check(donutText.includes('tok/s'), 'model legend should show tokens/s')
+check(donutText.includes('Model A') && donutText.includes('4 tok/s'), 'model legend should show the per-model speed')
+check(donutText.includes('P ·') && donutText.includes('Q ·'), 'model legend should label the provider next to the speed')
 const slices = []
 walk(donutTree, (node) => {
   if (node.type === 'circle' && typeof node.props?.onMouseEnter === 'function') slices.push(node)
@@ -281,4 +292,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error('  - ' + failure)
   process.exit(1)
 }
-console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + averages + model colours + first paint)')
+console.log('client-render: PASS (slots + two-stage hello + charts + toolbar + averages + model colours + speed + first paint)')

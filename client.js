@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
     const CLEAR_ROUTE = '/api/dsh-token-usage/clear'
 
     /** This half's version, sent with the hello. */
-    const VERSION = '0.2.2'
+    const VERSION = '0.2.3'
 
     /** Accent + categorical palette for the model series. */
     const ACCENT = '#4d6bfe'
@@ -175,6 +175,18 @@ window.__ModuleLoader__.load({
       if (hours > 0) parts.push(hours + '小时')
       if (minutes > 0 && days === 0) parts.push(minutes + '分钟')
       return parts.length === 0 ? '不到1分钟' : parts.join('')
+    }
+
+    /**
+     * Format a tokens/s figure for the stat card and the model legend.
+     * @param {number|null|undefined} value - tokens per second.
+     * @returns a compact string, or `—` when no timed sample exists.
+     */
+    function fmtSpeed(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—'
+      if (value >= 1000) return trimZeros((value / 1000).toFixed(1)) + 'k'
+      if (value >= 100) return String(Math.round(value))
+      return trimZeros(value.toFixed(1))
     }
 
     /** Format an epoch-ms value as `MM-DD HH:mm` in local time. */
@@ -709,6 +721,13 @@ window.__ModuleLoader__.load({
       const models = props.models ?? []
       const total = props.total ?? 0
       const colors = props.colors ?? {}
+      const speedText = (model) => fmtSpeed(model.tokensPerSecond) + (model.tokensPerSecond > 0 ? ' tok/s' : '')
+      const providerText = (model) => {
+        const provider = model.providerName !== undefined && model.providerName !== ''
+          ? model.providerName
+          : (typeof model.provider === 'string' ? model.provider : '')
+        return provider
+      }
       const colorOf = (model, index) => colorForModel(model.key ?? model.id, index, colors)
       const hasOverrides = Object.keys(colors).length > 0
       const [hover, setHover] = React.useState(null)
@@ -762,7 +781,8 @@ window.__ModuleLoader__.load({
           onMouseEnter: (event) => showTip(event, index),
           onMouseMove: (event) => showTip(event, index),
           onMouseLeave: () => setHover(null),
-        }, h('title', { key: 'title' }, `${model.label ?? model.name} · ${fmtTokens(model.tokens)} tokens · ${fmtShare(model.share)}`)))
+        }, h('title', { key: 'title' },
+          `${model.label ?? model.name} · ${providerText(model)} · ${fmtTokens(model.tokens)} tokens · ${fmtShare(model.share)} · ${speedText(model)}`)))
         offset += share
       })
 
@@ -833,7 +853,7 @@ window.__ModuleLoader__.load({
           h('span', {
             key: 'numbers',
             style: { fontSize: 11, opacity: 0.72 },
-          }, `${fmtTokens(tipModel.tokens)} tokens · ${fmtShare(tipModel.share)}`),
+          }, `${providerText(tipModel)} · ${fmtTokens(tipModel.tokens)} tokens · ${fmtShare(tipModel.share)} · ${speedText(tipModel)}`),
         ]),
       ])
 
@@ -851,7 +871,11 @@ window.__ModuleLoader__.load({
           }),
           h('div', { key: 'name', className: 'dstu-modelMeta' }, [
             h('div', { key: 'title', className: 'dstu-modelName', title: model.label ?? model.name }, model.label ?? model.name),
-            h('div', { key: 'tokens', className: 'dstu-modelTokens' }, `${fmtTokens(model.tokens)} tokens`),
+            h('div', {
+              key: 'tokens',
+              className: 'dstu-modelTokens',
+              title: 'tokens 按所选时间范围统计；tok/s 是该模型全部会话的平均吐字速度',
+            }, `${providerText(model)} · ${fmtTokens(model.tokens)} tokens · ${speedText(model)}`),
           ]),
           h('span', { key: 'share', className: 'dstu-modelShare' }, fmtShare(model.share)),
         ])))
@@ -1115,6 +1139,15 @@ window.__ModuleLoader__.load({
           value: fmtTokens(averages.hourlyAverage),
           unit: '/小时',
           title: `今日累计 ${fmtTokens(averages.todayTokens)} ÷ 已过 ${Math.max(1, Math.round(averages.elapsedHours))} 小时（不足 1 小时按 1 小时计）`,
+        },
+        {
+          key: 'speed',
+          label: '平均吐字速度',
+          value: fmtSpeed(totals.tokensPerSecond),
+          unit: ' tok/s',
+          title: totals.generationMs > 0
+            ? `全部会话：${fmtTokens(totals.outputTokens)} 输出 tokens ÷ ${Math.round(totals.generationMs / 1000)} 秒`
+            : '还没有带生成耗时的记录',
         },
         {
           key: 'peak',
@@ -1388,6 +1421,7 @@ window.__ModuleLoader__.load({
       COLOR_KEY,
       buildTokenAverages,
       StatCard,
+      fmtSpeed,
     }
 
     return module.exports

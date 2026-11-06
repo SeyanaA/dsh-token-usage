@@ -43,7 +43,7 @@ const events = [
     time: at(-1, 9, 0),
     data: { turn: 1, step: 1, header: { config: { provider: 'p', model: 'model-a' } } },
   },
-  { type: 'assistant/message', seq: 2, time: at(-1, 9, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000 } } },
+  { type: 'assistant/message', seq: 2, time: at(-1, 9, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000, outputTokens: 400 } } },
   { type: 'step/start', seq: 3, time: at(-1, 9, 5), data: { turn: 1, step: 2 } },
   {
     type: 'request/header',
@@ -51,7 +51,7 @@ const events = [
     time: at(-1, 9, 5),
     data: { turn: 1, step: 2, header: { config: { provider: 'p', model: 'model-b' } } },
   },
-  { type: 'assistant/message', seq: 5, time: at(-1, 9, 7), data: { turn: 1, step: 2, usage: { totalTokens: 500 } } },
+  { type: 'assistant/message', seq: 5, time: at(-1, 9, 7), data: { turn: 1, step: 2, usage: { totalTokens: 500, outputTokens: 200 } } },
   // A second day, far enough away to be its own chat block.
   { type: 'step/start', seq: 6, time: at(0, 10, 0), data: { turn: 2, step: 1 } },
   {
@@ -60,7 +60,7 @@ const events = [
     time: at(0, 10, 0),
     data: { turn: 2, step: 1, header: { config: { provider: 'p', model: 'model-a' } } },
   },
-  { type: 'assistant/message', seq: 8, time: at(0, 10, 3), data: { turn: 2, step: 1, usage: { totalTokens: 2000 } } },
+  { type: 'assistant/message', seq: 8, time: at(0, 10, 3), data: { turn: 2, step: 1, usage: { totalTokens: 2000, outputTokens: 800 } } },
 ]
 
 const header = { id: 'session-test', createdAt: at(-1, 9, 0) }
@@ -86,6 +86,24 @@ check(overview.models[0].label === 'Model A', 'a unique model name needs no prov
 check(overview.trend.models[0] === keyA, 'trend series reuse aggregation keys')
 check(Math.abs(overview.models[0].share - 3000 / 3500) < 1e-9, 'top model share')
 check(overview.trend.days.length === 7, 'trend range length')
+check(fold.speedOutputTokens === 1400, `speed output tokens ${fold.speedOutputTokens}, expected 1400`)
+check(fold.speedMs === 420000, `speed duration ${fold.speedMs}ms, expected 420000`)
+check(Math.abs((fold.speeds[keyA].outputTokens / fold.speeds[keyA].ms) * 1000 - 4) < 1e-9, 'model-a average speed')
+check(Math.abs(overview.totals.tokensPerSecond - 1400 / 420) < 1e-9, 'overview whole-history tokens/s')
+check(overview.totals.outputTokens === 1400 && overview.totals.generationMs === 420000, 'overview speed inputs')
+const speedA = overview.models.find((entry) => entry.key === keyA)
+const speedB = overview.models.find((entry) => entry.key === keyB)
+check(Math.abs(speedA.tokensPerSecond - 4) < 1e-9, 'model-a entry should carry tokens/s')
+check(Math.abs(speedB.tokensPerSecond - 200 / 120) < 1e-9, 'model-b entry should carry tokens/s')
+
+// A log without step boundaries cannot be timed: speed becomes null, not 0.
+const untimed = aggregateSession({ id: 'session-untimed' }, [
+  { type: 'assistant/message', time: at(0, 12, 2), data: { usage: { totalTokens: 100, outputTokens: 50 } } },
+])
+check(untimed.speedOutputTokens === 0 && Object.keys(untimed.speeds).length === 0, 'untimed log must not fabricate speed')
+const untimedOverview = buildOverview([untimed], 7, names, dayKey(0))
+check(untimedOverview.totals.tokensPerSecond === null, 'untimed overview speed must be null')
+check(untimedOverview.models[0].tokensPerSecond === null, 'untimed model speed must be null')
 
 // The heatmap covers twelve whole calendar months ending with the current one,
 // so the current month's not-yet-reached days are already in the grid.
@@ -113,7 +131,7 @@ const firstFold = aggregateSession({ id: 'session-test-1b' }, [
     time: at(0, 11, 0),
     data: { turn: 1, step: 1, header: { config: { provider: 'p', model: 'model-a' } } },
   },
-  { type: 'assistant/message', time: at(0, 11, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000 } } },
+  { type: 'assistant/message', time: at(0, 11, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000, outputTokens: 400 } } },
 ])
 const secondFold = aggregateSession({ id: 'session-test-2' }, [
   {
@@ -121,7 +139,7 @@ const secondFold = aggregateSession({ id: 'session-test-2' }, [
     time: at(0, 11, 0),
     data: { turn: 1, step: 1, header: { config: { provider: 'q', model: 'model-a' } } },
   },
-  { type: 'assistant/message', time: at(0, 11, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000 } } },
+  { type: 'assistant/message', time: at(0, 11, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000, outputTokens: 400 } } },
 ])
 const collision = buildOverview([firstFold, secondFold], 7, { 'model-a': 'Model A' }, dayKey(0))
 check(collision.models.length === 2, 'collision overview should keep both provider rows')
@@ -150,7 +168,7 @@ const rawFolds = ['opencode-go', 'deepseek-official'].map((provider, index) => a
       time: at(0, 12, 0),
       data: { turn: 1, step: 1, header: { config: { provider, model: 'model-a' } } },
     },
-    { type: 'assistant/message', time: at(0, 12, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000 } } },
+    { type: 'assistant/message', time: at(0, 12, 2), data: { turn: 1, step: 1, usage: { totalTokens: 1000, outputTokens: 400 } } },
   ],
 ))
 const rawCatalog = buildOverview(rawFolds, 7, { 'model-a': 'Model A' }, dayKey(0))
